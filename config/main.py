@@ -12,15 +12,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AWSSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AWS_", env_file=".env", extra="ignore")
 
-    role_arn: str = Field(..., description="ARN of the IAM role to assume in the target account")
-    external_id: SecretStr = Field(..., description="External ID for confused-deputy protection")
+    role_arn: str | None = Field(default=None, description="ARN of the IAM role to assume in the target account")
+    external_id: SecretStr = Field(default=SecretStr(""), description="External ID for confused-deputy protection")
     regions: list[str] = Field(default_factory=list, description="Regions to scan; empty = all enabled")
     session_duration_seconds: Annotated[int, Field(ge=900, le=3600)] = 900
 
     @field_validator("role_arn")
     @classmethod
-    def validate_role_arn(cls, v: str) -> str:
-        if not v.startswith("arn:aws"):
+    def validate_role_arn(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith("arn:aws"):
             raise ValueError("role_arn must be a valid AWS ARN starting with 'arn:aws'")
         return v
 
