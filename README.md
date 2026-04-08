@@ -29,32 +29,32 @@ The tool uses **zero static credentials** — it assumes an IAM role via AWS STS
 │                              main.py: run_scan()                             │
 ├───────────────┬──────────────────────────────────────────────────────────────┤
 │               │                                                              │
-│   AUTH        │  CredentialProvider (STS AssumeRole)                        │
+│   AUTH        │  CredentialProvider (STS AssumeRole)                         │
 │               │  └─ Produces temporary credentials (15-min TTL, auto-refresh)│
 │               │                                                              │
 ├───────────────┼──────────────────────────────────────────────────────────────┤
 │               │                                                              │
-│   DISCOVER    │  resolve_account_id() → STS GetCallerIdentity               │
-│               │  discover_enabled_regions() → EC2 DescribeRegions           │
+│   DISCOVER    │  resolve_account_id() → STS GetCallerIdentity                │
+│               │  discover_enabled_regions() → EC2 DescribeRegions            │
 │               │                                                              │
 ├───────────────┼──────────────────────────────────────────────────────────────┤
 │               │                                                              │
-│   COLLECT     │  Per-region (all regions run concurrently):                 │
-│  (async)      │  ├─ VPCCollector   → VPCs, Subnets, SGs, IGWs, NATs, RTs   │
-│               │  ├─ EC2Collector   → EC2 Instances + ENIs                  │
-│               │  ├─ RDSCollector   → DB Instances + Aurora Clusters         │
-│               │  └─ S3Collector    → All Buckets (once, first region only)  │
+│   COLLECT     │  Per-region (all regions run concurrently):                  │
+│  (async)      │  ├─ VPCCollector   → VPCs, Subnets, SGs, IGWs, NATs, RTs     │
+│               │  ├─ EC2Collector   → EC2 Instances + ENIs                    │
+│               │  ├─ RDSCollector   → DB Instances + Aurora Clusters          │
+│               │  └─ S3Collector    → All Buckets (once, first region only)   │
 │               │                                                              │
 ├───────────────┼──────────────────────────────────────────────────────────────┤
 │               │                                                              │
-│   PROCESS     │  merge_inventories() → single merged RegionInventory        │
-│               │  GraphBuilder.build() → GraphDocument                       │
-│               │  └─ Nodes + Edges + Group Indexes + ScanMetadata            │
+│   PROCESS     │  merge_inventories() → single merged RegionInventory         │
+│               │  GraphBuilder.build() → GraphDocument                        │
+│               │  └─ Nodes + Edges + Group Indexes + ScanMetadata             │
 │               │                                                              │
 ├───────────────┼──────────────────────────────────────────────────────────────┤
 │               │                                                              │
-│   STORE       │  MongoStore.save_scan()    → Full document in MongoDB       │
-│  (parallel)   │  Neo4jStore.ingest_graph() → Nodes + edges in Neo4j         │
+│   STORE       │  MongoStore.save_scan()    → Full document in MongoDB        │
+│  (parallel)   │  Neo4jStore.ingest_graph() → Nodes + edges in Neo4j          │
 │               │                                                              │
 └───────────────┴──────────────────────────────────────────────────────────────┘
 ```

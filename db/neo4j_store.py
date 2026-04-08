@@ -100,9 +100,11 @@ class Neo4jStore:
 
         for label, label_nodes in by_label.items():
             for batch in _chunks(label_nodes, _BATCH_SIZE):
+                # MERGE on (id, user_id) so each user gets isolated nodes
+                # even when multiple users scan the same AWS account
                 query = f"""
                 UNWIND $nodes AS n
-                MERGE (resource:{label} {{id: n.id}})
+                MERGE (resource:{label} {{id: n.id, user_id: n.user_id}})
                 SET resource += n.props
                 SET resource.updated_at = timestamp()
                 """
@@ -110,6 +112,7 @@ class Neo4jStore:
                     "nodes": [
                         {
                             "id": node.id,
+                            "user_id": node.user_id or "",
                             "props": _flatten_props(node),
                         }
                         for node in batch
@@ -131,9 +134,15 @@ class Neo4jStore:
             by_key.setdefault(key, []).append(edge)
 
         for (src_lbl, tgt_lbl, rel_type), group_edges in by_key.items():
-            # Build MATCH clauses: use labels when known, fall back to unlabeled.
-            src_match = f"(src:{src_lbl} {{id: e.source}})" if src_lbl else "(src {id: e.source})"
-            tgt_match = f"(tgt:{tgt_lbl} {{id: e.target}})" if tgt_lbl else "(tgt {id: e.target})"
+            # Build MATCH clauses with user_id in key to stay within tenant's graph
+            if src_lbl:
+                src_match = f"(src:{src_lbl} {{id: e.source, user_id: e.user_id}})"
+            else:
+                src_match = "(src {id: e.source, user_id: e.user_id})"
+            if tgt_lbl:
+                tgt_match = f"(tgt:{tgt_lbl} {{id: e.target, user_id: e.user_id}})"
+            else:
+                tgt_match = "(tgt {id: e.target, user_id: e.user_id})"
             query = f"""
             UNWIND $edges AS e
             MATCH {src_match}
@@ -148,6 +157,7 @@ class Neo4jStore:
                         {
                             "source": edge.source,
                             "target": edge.target,
+                            "user_id": edge.properties.get("user_id", ""),
                             "props": edge.properties,
                         }
                         for edge in batch
@@ -157,18 +167,53 @@ class Neo4jStore:
                     result = await session.run(query, params)
                     await result.consume()
 
-    async def get_resource_graph(self, resource_id: str, depth: int = 2) -> dict[str, Any]:
+    async def get_user_graph(self, user_id: str) -> dict[str, Any]:
         """
-        Return the neighbourhood of a resource up to `depth` hops.
-        Useful for the future FastAPI endpoint.
+        Return all nodes and relationships belonging to a user.
+        Used by the API to deliver graph data to the frontend.
         """
         assert self._driver is not None  # noqa: S101
         query = """
-        MATCH path = (start {id: $resource_id})-[*1..$depth]-()
+        MATCH (n {user_id: $user_id})
+        OPTIONAL MATCH (n)-[r]->(m {user_id: $user_id})
+        RETURN
+            n.id          AS source_id,
+            labels(n)[0]  AS source_label,
+            n             AS source_props,
+            type(r)       AS rel_type,
+            m.id          AS target_id,
+            labels(m)[0]  AS target_label
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, user_id=user_id)
+            records = await result.data()
+
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
+        for row in records:
+            sid = row["source_id"]
+            if sid and sid not in nodes:
+                props = dict(row["source_props"])
+                props.pop("user_id", None)
+                nodes[sid] = {"id": sid, "label": row["source_label"], "properties": props}
+            if row["rel_type"] and row["target_id"]:
+                edges.append({
+                    "source": sid,
+                    "target": row["target_id"],
+                    "type": row["rel_type"],
+                })
+
+        return {"nodes": list(nodes.values()), "edges": edges}
+
+    async def get_resource_neighbourhood(self, user_id: str, resource_id: str, depth: int = 2) -> dict[str, Any]:
+        """Return the neighbourhood of a single resource up to `depth` hops, scoped to the user."""
+        assert self._driver is not None  # noqa: S101
+        query = """
+        MATCH path = (start {id: $resource_id, user_id: $user_id})-[*1..$depth]-({user_id: $user_id})
         RETURN path
         """
         async with self._driver.session() as session:
-            result = await session.run(query, resource_id=resource_id, depth=depth)
+            result = await session.run(query, resource_id=resource_id, user_id=user_id, depth=depth)
             records = await result.data()
             return {"resource_id": resource_id, "depth": depth, "paths": records}
 
@@ -184,6 +229,7 @@ def _flatten_props(node: GraphNode) -> dict[str, Any]:
         "name": node.name,
         "region": node.region,
         "account_id": node.account_id,
+        "user_id": node.user_id or "",
         "vpc_id": node.vpc_id,
         "subnet_id": node.subnet_id,
         "app": node.app,

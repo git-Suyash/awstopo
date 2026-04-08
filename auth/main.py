@@ -44,11 +44,27 @@ class CredentialProvider:
     refreshes when multiple collectors run concurrently.
     """
 
-    def __init__(self, settings: AWSSettings) -> None:
-        self._settings = settings
+    def __init__(
+        self,
+        role_arn: str,
+        external_id: str,
+        session_duration_seconds: int = 900,
+    ) -> None:
+        self._role_arn = role_arn
+        self._external_id = external_id
+        self._session_duration = session_duration_seconds
         self._credentials: STSCredentials | None = None
         self._expiry: datetime | None = None
         self._lock = asyncio.Lock()
+
+    @classmethod
+    def from_settings(cls, settings: AWSSettings) -> "CredentialProvider":
+        """Convenience constructor for the CLI entry point."""
+        return cls(
+            role_arn=settings.role_arn,
+            external_id=settings.external_id.get_secret_value(),
+            session_duration_seconds=settings.session_duration_seconds,
+        )
 
     async def get_credentials(self) -> STSCredentials:
         """Return valid temporary credentials, refreshing if needed."""
@@ -64,15 +80,15 @@ class CredentialProvider:
         return datetime.now(UTC) >= self._expiry - _REFRESH_BUFFER
 
     async def _refresh(self) -> None:
-        log.info("sts.assume_role.start", role_arn=self._settings.role_arn)
+        log.info("sts.assume_role.start", role_arn=self._role_arn)
         session = aioboto3.Session()
         try:
             async with session.client("sts") as sts:
                 response = await sts.assume_role(
-                    RoleArn=self._settings.role_arn,
+                    RoleArn=self._role_arn,
                     RoleSessionName="AWSMapperScan",
-                    ExternalId=self._settings.external_id.get_secret_value(),
-                    DurationSeconds=self._settings.session_duration_seconds,
+                    ExternalId=self._external_id,
+                    DurationSeconds=self._session_duration,
                 )
         except Exception as exc:
             raise AuthError(f"STS AssumeRole failed: {exc}") from exc
@@ -86,7 +102,7 @@ class CredentialProvider:
         self._expiry = creds["Expiration"]
         log.info(
             "sts.assume_role.success",
-            role_arn=self._settings.role_arn,
+            role_arn=self._role_arn,
             expires_at=self._expiry.isoformat(),
         )
 

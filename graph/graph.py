@@ -91,6 +91,9 @@ class GraphNode(BaseModel):
     label: NodeLabel
     properties: dict[str, Any] = Field(default_factory=dict)
 
+    # Tenant identifier — used as part of Neo4j MERGE key for isolation
+    user_id: str | None = None
+
     # Denormalised fields for fast frontend grouping
     vpc_id: str | None = None
     subnet_id: str | None = None
@@ -140,6 +143,7 @@ class ResourceGroups(BaseModel):
 
 
 class ScanMetadata(BaseModel):
+    user_id: str              # tenant identifier — every scan belongs to one user
     account_id: str
     scan_id: str              # UUID — used as idempotency key in DB
     started_at: datetime

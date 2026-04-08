@@ -54,6 +54,7 @@ class GraphBuilder:
         nodes: list[GraphNode] = []
         edges: list[GraphEdge] = []
         groups = ResourceGroups()
+        user_id = metadata.user_id
 
         # ── Account & Region virtual nodes ─────────────────────────────────────
         account_node = GraphNode(
@@ -61,6 +62,7 @@ class GraphBuilder:
             label=NodeLabel.ACCOUNT,
             properties={"account_id": inventory.account_id},
             account_id=inventory.account_id,
+            user_id=user_id,
         )
         region_node = GraphNode(
             id=f"{inventory.account_id}:{inventory.region}",
@@ -68,6 +70,7 @@ class GraphBuilder:
             properties={"region": inventory.region},
             account_id=inventory.account_id,
             region=inventory.region,
+            user_id=user_id,
         )
         nodes.extend([account_node, region_node])
         edges.append(
@@ -82,7 +85,7 @@ class GraphBuilder:
 
         # ── Process each resource type ──────────────────────────────────────────
         for vpc in inventory.vpcs:
-            node = self._make_node(vpc)
+            node = self._make_node(vpc, user_id=user_id)
             nodes.append(node)
             edges.append(GraphEdge(
                 source=node.id, target=region_node.id, type=EdgeType.IN_REGION,
@@ -91,7 +94,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for subnet in inventory.subnets:
-            node = self._make_node(subnet, vpc_id=subnet.vpc_id)
+            node = self._make_node(subnet, vpc_id=subnet.vpc_id, user_id=user_id)
             nodes.append(node)
             edges.append(GraphEdge(
                 source=node.id, target=subnet.vpc_id, type=EdgeType.IN_VPC,
@@ -100,7 +103,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for sg in inventory.security_groups:
-            node = self._make_node(sg, vpc_id=sg.vpc_id)
+            node = self._make_node(sg, vpc_id=sg.vpc_id, user_id=user_id)
             nodes.append(node)
             edges.append(GraphEdge(
                 source=node.id, target=sg.vpc_id, type=EdgeType.IN_VPC,
@@ -122,7 +125,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for igw in inventory.internet_gateways:
-            node = self._make_node(igw)
+            node = self._make_node(igw, user_id=user_id)
             nodes.append(node)
             for vpc_id in igw.attached_vpc_ids:
                 edges.append(GraphEdge(
@@ -132,7 +135,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for nat in inventory.nat_gateways:
-            node = self._make_node(nat, vpc_id=nat.vpc_id, subnet_id=nat.subnet_id)
+            node = self._make_node(nat, vpc_id=nat.vpc_id, subnet_id=nat.subnet_id, user_id=user_id)
             nodes.append(node)
             edges.append(GraphEdge(
                 source=node.id, target=nat.vpc_id, type=EdgeType.IN_VPC,
@@ -145,7 +148,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for rt in inventory.route_tables:
-            node = self._make_node(rt, vpc_id=rt.vpc_id)
+            node = self._make_node(rt, vpc_id=rt.vpc_id, user_id=user_id)
             nodes.append(node)
             edges.append(GraphEdge(
                 source=node.id, target=rt.vpc_id, type=EdgeType.IN_VPC,
@@ -159,7 +162,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for ec2 in inventory.ec2_instances:
-            node = self._make_node(ec2, vpc_id=ec2.vpc_id, subnet_id=ec2.subnet_id)
+            node = self._make_node(ec2, vpc_id=ec2.vpc_id, subnet_id=ec2.subnet_id, user_id=user_id)
             nodes.append(node)
             if ec2.vpc_id:
                 edges.append(GraphEdge(
@@ -179,7 +182,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for rds in inventory.rds_instances:
-            node = self._make_node(rds, vpc_id=rds.vpc_id)
+            node = self._make_node(rds, vpc_id=rds.vpc_id, user_id=user_id)
             nodes.append(node)
             if rds.vpc_id:
                 edges.append(GraphEdge(
@@ -206,7 +209,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for cluster in inventory.rds_clusters:
-            node = self._make_node(cluster, vpc_id=cluster.vpc_id)
+            node = self._make_node(cluster, vpc_id=cluster.vpc_id, user_id=user_id)
             nodes.append(node)
             if cluster.vpc_id:
                 edges.append(GraphEdge(
@@ -221,7 +224,7 @@ class GraphBuilder:
             self._add_to_groups(groups, node)
 
         for s3 in inventory.s3_buckets:
-            node = self._make_node(s3)
+            node = self._make_node(s3, user_id=user_id)
             # S3 properties enriched inline
             node.properties.update(
                 {
@@ -266,6 +269,7 @@ class GraphBuilder:
         resource: BaseResource,
         vpc_id: str | None = None,
         subnet_id: str | None = None,
+        user_id: str | None = None,
     ) -> GraphNode:
         label = RESOURCE_TYPE_TO_LABEL[resource.resource_type]
         props: dict = {
@@ -280,6 +284,7 @@ class GraphBuilder:
             id=resource.resource_id,
             label=label,
             properties=props,
+            user_id=user_id,
             vpc_id=vpc_id,
             subnet_id=subnet_id,
             region=resource.region,

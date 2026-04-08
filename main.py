@@ -153,16 +153,26 @@ async def resolve_account_id(credential_provider: CredentialProvider) -> str:
         return identity["Account"]
 
 
-async def run_scan(settings: Settings | None = None) -> GraphDocument:
+async def run_scan(
+    *,
+    user_id: str,
+    role_arn: str,
+    external_id: str,
+    regions: list[str] | None = None,
+    settings: Settings | None = None,
+) -> GraphDocument:
     """
     Full scan pipeline entry point.
 
+    Accepts per-user AWS credentials so multiple users can each scan
+    their own account in isolation.
+
     Steps:
-      1. Auth  — assume role via STS
+      1. Auth  — assume role via STS using the user's role_arn + external_id
       2. Discover account ID and regions
       3. Collect — all regions concurrently (S3 collected once with first region)
-      4. Process — merge inventories, build graph
-      5. Store  — MongoDB + Neo4j concurrently
+      4. Process — merge inventories, build graph tagged with user_id
+      5. Store  — MongoDB + Neo4j concurrently (tenant-isolated by user_id)
     """
     if settings is None:
         settings = get_settings()
@@ -171,16 +181,21 @@ async def run_scan(settings: Settings | None = None) -> GraphDocument:
     scan_id = str(uuid.uuid4())
     started_at = datetime.now(UTC)
 
-    log.info("scan.start", scan_id=scan_id, role_arn=settings.aws.role_arn)
+    log.info("scan.start", scan_id=scan_id, role_arn=role_arn, user_id=user_id)
 
     # ── 1. Auth ─────────────────────────────────────────────────────────────────
-    credential_provider = CredentialProvider(settings.aws)
+    credential_provider = CredentialProvider(
+        role_arn=role_arn,
+        external_id=external_id,
+        session_duration_seconds=settings.aws.session_duration_seconds,
+    )
 
     # ── 2. Discover ─────────────────────────────────────────────────────────────
     account_id = await resolve_account_id(credential_provider)
     structlog.contextvars.bind_contextvars(account_id=account_id, scan_id=scan_id)
 
-    regions = settings.aws.regions
+    if not regions:
+        regions = settings.aws.regions
     if not regions:
         regions = await discover_enabled_regions(credential_provider)
         log.info("regions.auto_discovered", count=len(regions), regions=regions)
@@ -205,6 +220,7 @@ async def run_scan(settings: Settings | None = None) -> GraphDocument:
     all_errors = {k: v for inv in inventories for k, v in inv.collector_errors.items()}
 
     metadata = ScanMetadata(
+        user_id=user_id,
         account_id=account_id,
         scan_id=scan_id,
         started_at=started_at,
@@ -214,6 +230,9 @@ async def run_scan(settings: Settings | None = None) -> GraphDocument:
 
     builder = GraphBuilder()
     graph_doc = builder.build(merged, metadata)
+    # Stamp user_id onto every edge so Neo4j MATCH can scope to this tenant
+    for edge in graph_doc.edges:
+        edge.properties["user_id"] = user_id
     graph_doc.metadata.completed_at = datetime.now(UTC)
 
     log.info(
@@ -255,4 +274,11 @@ async def run_scan(settings: Settings | None = None) -> GraphDocument:
 
 
 if __name__ == "__main__":
-    asyncio.run(run_scan())
+    _s = get_settings()
+    asyncio.run(run_scan(
+        user_id="cli",
+        role_arn=_s.aws.role_arn,
+        external_id=_s.aws.external_id.get_secret_value(),
+        regions=_s.aws.regions,
+        settings=_s,
+    ))

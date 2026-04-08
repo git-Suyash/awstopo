@@ -82,11 +82,12 @@ class MongoStore:
             raw = doc.to_mongo_dict()
             await collection.replace_one({"_id": scan_id}, raw, upsert=True)
 
-            # Write to lightweight index
+            # Write to lightweight index (includes user_id for per-user queries)
             await self._db[_INDEX_COLLECTION].replace_one(
                 {"scan_id": scan_id},
                 {
                     "scan_id": scan_id,
+                    "user_id": doc.metadata.user_id,
                     "account_id": doc.metadata.account_id,
                     "started_at": doc.metadata.started_at,
                     "completed_at": doc.metadata.completed_at,
@@ -106,22 +107,31 @@ class MongoStore:
         except Exception as exc:
             raise StorageError(f"MongoDB save failed: {exc}") from exc
 
-    async def get_latest_scan(self, account_id: str) -> dict[str, Any] | None:
+    async def get_latest_scan_for_user(self, user_id: str) -> dict[str, Any] | None:
+        """Return the most recent completed scan document for a user."""
         assert self._db is not None  # noqa: S101
         cursor = (
             self._db[_SCANS_COLLECTION]
-            .find({"metadata.account_id": account_id})
-            .sort("metadata.started_at", DESCENDING)
+            .find({"metadata.user_id": user_id})
+            .sort("metadata.completed_at", DESCENDING)
             .limit(1)
         )
         docs = await cursor.to_list(length=1)
         return docs[0] if docs else None
 
-    async def list_scans(self, account_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    async def get_scan_by_id(self, scan_id: str, user_id: str) -> dict[str, Any] | None:
+        """Return a specific scan document, verifying it belongs to the user."""
+        assert self._db is not None  # noqa: S101
+        return await self._db[_SCANS_COLLECTION].find_one(
+            {"_id": scan_id, "metadata.user_id": user_id}
+        )
+
+    async def list_scans_for_user(self, user_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Return lightweight scan index entries for a user, newest first."""
         assert self._db is not None  # noqa: S101
         cursor = (
             self._db[_INDEX_COLLECTION]
-            .find({"account_id": account_id})
+            .find({"user_id": user_id})
             .sort("started_at", DESCENDING)
             .limit(limit)
         )
