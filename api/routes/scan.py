@@ -20,6 +20,8 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from api.deps import get_current_user, get_db
 from config.main import get_settings
+from synthesizer.slim import synthesize
+from graph.graph import GraphDocument
 
 log = structlog.get_logger(__name__)
 
@@ -179,8 +181,9 @@ async def get_graph(
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
 ):
     """
-    Return the full resource graph (nodes, edges, groups) for the most recent
-    completed scan belonging to the authenticated user.
+    Return a synthesized resource graph (nodes, edges) for the most recent
+    completed scan. Strips internal fields, redundant denorms, and the groups
+    index — keeping only essential topology data.
     """
     user_id = current_user["_id"]
 
@@ -195,7 +198,7 @@ async def get_graph(
         )
 
     doc.pop("_id", None)
-    return doc
+    return synthesize(GraphDocument(**doc))
 
 
 @router.get("/graph/{scan_id}")
@@ -204,11 +207,11 @@ async def get_graph_by_scan(
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
 ):
-    """Return the resource graph for a specific past scan."""
+    """Return the synthesized resource graph for a specific past scan."""
     doc = await db["scans"].find_one(
         {"_id": scan_id, "metadata.user_id": current_user["_id"]}
     )
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     doc.pop("_id", None)
-    return doc
+    return synthesize(GraphDocument(**doc))

@@ -11,5 +11,9 @@ wheels/
 # Virtual environments
 .venv
 
+
+# AI and related files
 .claude
 tasks.md
+API.md
+output.json
