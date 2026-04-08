@@ -106,6 +106,8 @@ class GraphEdge(BaseModel):
     target: str          # node id
     type: EdgeType
     properties: dict[str, Any] = Field(default_factory=dict)
+    source_label: NodeLabel | None = None
+    target_label: NodeLabel | None = None
 
 
 # ── Grouping index ─────────────────────────────────────────────────────────────

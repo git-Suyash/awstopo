@@ -75,6 +75,8 @@ class GraphBuilder:
                 source=region_node.id,
                 target=account_node.id,
                 type=EdgeType.BELONGS_TO_ACCOUNT,
+                source_label=NodeLabel.REGION,
+                target_label=NodeLabel.ACCOUNT,
             )
         )
 
@@ -82,19 +84,28 @@ class GraphBuilder:
         for vpc in inventory.vpcs:
             node = self._make_node(vpc)
             nodes.append(node)
-            edges.append(GraphEdge(source=node.id, target=region_node.id, type=EdgeType.IN_REGION))
+            edges.append(GraphEdge(
+                source=node.id, target=region_node.id, type=EdgeType.IN_REGION,
+                source_label=NodeLabel.VPC, target_label=NodeLabel.REGION,
+            ))
             self._add_to_groups(groups, node)
 
         for subnet in inventory.subnets:
             node = self._make_node(subnet, vpc_id=subnet.vpc_id)
             nodes.append(node)
-            edges.append(GraphEdge(source=node.id, target=subnet.vpc_id, type=EdgeType.IN_VPC))
+            edges.append(GraphEdge(
+                source=node.id, target=subnet.vpc_id, type=EdgeType.IN_VPC,
+                source_label=NodeLabel.SUBNET, target_label=NodeLabel.VPC,
+            ))
             self._add_to_groups(groups, node)
 
         for sg in inventory.security_groups:
             node = self._make_node(sg, vpc_id=sg.vpc_id)
             nodes.append(node)
-            edges.append(GraphEdge(source=node.id, target=sg.vpc_id, type=EdgeType.IN_VPC))
+            edges.append(GraphEdge(
+                source=node.id, target=sg.vpc_id, type=EdgeType.IN_VPC,
+                source_label=NodeLabel.SECURITY_GROUP, target_label=NodeLabel.VPC,
+            ))
             # SG → SG references (ingress rules that ref other SGs)
             for rule in sg.inbound_rules:
                 for source_sg_id in rule.source_sg_ids:
@@ -104,6 +115,8 @@ class GraphBuilder:
                             target=source_sg_id,
                             type=EdgeType.SG_REFERENCES_SG,
                             properties={"protocol": rule.protocol, "from_port": rule.from_port},
+                            source_label=NodeLabel.SECURITY_GROUP,
+                            target_label=NodeLabel.SECURITY_GROUP,
                         )
                     )
             self._add_to_groups(groups, node)
@@ -112,77 +125,99 @@ class GraphBuilder:
             node = self._make_node(igw)
             nodes.append(node)
             for vpc_id in igw.attached_vpc_ids:
-                edges.append(
-                    GraphEdge(source=node.id, target=vpc_id, type=EdgeType.ATTACHED_TO_VPC)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=vpc_id, type=EdgeType.ATTACHED_TO_VPC,
+                    source_label=NodeLabel.INTERNET_GATEWAY, target_label=NodeLabel.VPC,
+                ))
             self._add_to_groups(groups, node)
 
         for nat in inventory.nat_gateways:
             node = self._make_node(nat, vpc_id=nat.vpc_id, subnet_id=nat.subnet_id)
             nodes.append(node)
-            edges.append(GraphEdge(source=node.id, target=nat.vpc_id, type=EdgeType.IN_VPC))
-            edges.append(GraphEdge(source=node.id, target=nat.subnet_id, type=EdgeType.IN_SUBNET))
+            edges.append(GraphEdge(
+                source=node.id, target=nat.vpc_id, type=EdgeType.IN_VPC,
+                source_label=NodeLabel.NAT_GATEWAY, target_label=NodeLabel.VPC,
+            ))
+            edges.append(GraphEdge(
+                source=node.id, target=nat.subnet_id, type=EdgeType.IN_SUBNET,
+                source_label=NodeLabel.NAT_GATEWAY, target_label=NodeLabel.SUBNET,
+            ))
             self._add_to_groups(groups, node)
 
         for rt in inventory.route_tables:
             node = self._make_node(rt, vpc_id=rt.vpc_id)
             nodes.append(node)
-            edges.append(GraphEdge(source=node.id, target=rt.vpc_id, type=EdgeType.IN_VPC))
+            edges.append(GraphEdge(
+                source=node.id, target=rt.vpc_id, type=EdgeType.IN_VPC,
+                source_label=NodeLabel.ROUTE_TABLE, target_label=NodeLabel.VPC,
+            ))
             for subnet_id in rt.associated_subnet_ids:
-                edges.append(
-                    GraphEdge(source=subnet_id, target=node.id, type=EdgeType.HAS_ROUTE_TABLE)
-                )
+                edges.append(GraphEdge(
+                    source=subnet_id, target=node.id, type=EdgeType.HAS_ROUTE_TABLE,
+                    source_label=NodeLabel.SUBNET, target_label=NodeLabel.ROUTE_TABLE,
+                ))
             self._add_to_groups(groups, node)
 
         for ec2 in inventory.ec2_instances:
             node = self._make_node(ec2, vpc_id=ec2.vpc_id, subnet_id=ec2.subnet_id)
             nodes.append(node)
             if ec2.vpc_id:
-                edges.append(GraphEdge(source=node.id, target=ec2.vpc_id, type=EdgeType.IN_VPC))
+                edges.append(GraphEdge(
+                    source=node.id, target=ec2.vpc_id, type=EdgeType.IN_VPC,
+                    source_label=NodeLabel.EC2_INSTANCE, target_label=NodeLabel.VPC,
+                ))
             if ec2.subnet_id:
-                edges.append(
-                    GraphEdge(source=node.id, target=ec2.subnet_id, type=EdgeType.IN_SUBNET)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=ec2.subnet_id, type=EdgeType.IN_SUBNET,
+                    source_label=NodeLabel.EC2_INSTANCE, target_label=NodeLabel.SUBNET,
+                ))
             for sg_id in ec2.security_group_ids:
-                edges.append(
-                    GraphEdge(source=node.id, target=sg_id, type=EdgeType.PROTECTED_BY)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=sg_id, type=EdgeType.PROTECTED_BY,
+                    source_label=NodeLabel.EC2_INSTANCE, target_label=NodeLabel.SECURITY_GROUP,
+                ))
             self._add_to_groups(groups, node)
 
         for rds in inventory.rds_instances:
             node = self._make_node(rds, vpc_id=rds.vpc_id)
             nodes.append(node)
             if rds.vpc_id:
-                edges.append(GraphEdge(source=node.id, target=rds.vpc_id, type=EdgeType.IN_VPC))
+                edges.append(GraphEdge(
+                    source=node.id, target=rds.vpc_id, type=EdgeType.IN_VPC,
+                    source_label=NodeLabel.RDS_INSTANCE, target_label=NodeLabel.VPC,
+                ))
             for subnet_id in rds.subnet_ids:
-                edges.append(
-                    GraphEdge(source=node.id, target=subnet_id, type=EdgeType.IN_SUBNET)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=subnet_id, type=EdgeType.IN_SUBNET,
+                    source_label=NodeLabel.RDS_INSTANCE, target_label=NodeLabel.SUBNET,
+                ))
             for sg_id in rds.security_group_ids:
-                edges.append(
-                    GraphEdge(source=node.id, target=sg_id, type=EdgeType.PROTECTED_BY)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=sg_id, type=EdgeType.PROTECTED_BY,
+                    source_label=NodeLabel.RDS_INSTANCE, target_label=NodeLabel.SECURITY_GROUP,
+                ))
             if rds.db_cluster_identifier:
-                edges.append(
-                    GraphEdge(
-                        source=node.id,
-                        target=rds.db_cluster_identifier,
-                        type=EdgeType.MEMBER_OF_CLUSTER,
-                    )
-                )
+                edges.append(GraphEdge(
+                    source=node.id,
+                    target=rds.db_cluster_identifier,
+                    type=EdgeType.MEMBER_OF_CLUSTER,
+                    source_label=NodeLabel.RDS_INSTANCE, target_label=NodeLabel.RDS_CLUSTER,
+                ))
             self._add_to_groups(groups, node)
 
         for cluster in inventory.rds_clusters:
             node = self._make_node(cluster, vpc_id=cluster.vpc_id)
             nodes.append(node)
             if cluster.vpc_id:
-                edges.append(
-                    GraphEdge(source=node.id, target=cluster.vpc_id, type=EdgeType.IN_VPC)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=cluster.vpc_id, type=EdgeType.IN_VPC,
+                    source_label=NodeLabel.RDS_CLUSTER, target_label=NodeLabel.VPC,
+                ))
             for sg_id in cluster.security_group_ids:
-                edges.append(
-                    GraphEdge(source=node.id, target=sg_id, type=EdgeType.PROTECTED_BY)
-                )
+                edges.append(GraphEdge(
+                    source=node.id, target=sg_id, type=EdgeType.PROTECTED_BY,
+                    source_label=NodeLabel.RDS_CLUSTER, target_label=NodeLabel.SECURITY_GROUP,
+                ))
             self._add_to_groups(groups, node)
 
         for s3 in inventory.s3_buckets:
@@ -200,9 +235,10 @@ class GraphBuilder:
             )
             nodes.append(node)
             # S3 belongs to account, not region (global service)
-            edges.append(
-                GraphEdge(source=node.id, target=account_node.id, type=EdgeType.BELONGS_TO_ACCOUNT)
-            )
+            edges.append(GraphEdge(
+                source=node.id, target=account_node.id, type=EdgeType.BELONGS_TO_ACCOUNT,
+                source_label=NodeLabel.S3_BUCKET, target_label=NodeLabel.ACCOUNT,
+            ))
             self._add_to_groups(groups, node)
 
         # ── Deduplicate edges ───────────────────────────────────────────────────

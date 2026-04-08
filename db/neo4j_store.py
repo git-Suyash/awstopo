@@ -116,25 +116,33 @@ class Neo4jStore:
                     ]
                 }
                 async with self._driver.session() as session:
-                    await session.run(query, params)
+                    result = await session.run(query, params)
+                    await result.consume()
 
     async def _write_edges(self, edges: list[GraphEdge]) -> None:
         assert self._driver is not None  # noqa: S101
-        # Group edges by type for efficient batch MERGE
-        by_type: dict[str, list[GraphEdge]] = {}
+        # Group edges by (source_label, target_label, type) so every batch can
+        # use label-qualified MATCH and hit the uniqueness-constraint indexes.
+        by_key: dict[tuple[str, str, str], list[GraphEdge]] = {}
         for edge in edges:
-            by_type.setdefault(edge.type.value, []).append(edge)
+            src_lbl = edge.source_label.value if edge.source_label else ""
+            tgt_lbl = edge.target_label.value if edge.target_label else ""
+            key = (src_lbl, tgt_lbl, edge.type.value)
+            by_key.setdefault(key, []).append(edge)
 
-        for rel_type, type_edges in by_type.items():
-            for batch in _chunks(type_edges, _BATCH_SIZE):
-                query = f"""
-                UNWIND $edges AS e
-                MATCH (src {{id: e.source}})
-                MATCH (tgt {{id: e.target}})
-                MERGE (src)-[r:{rel_type}]->(tgt)
-                SET r += e.props
-                SET r.updated_at = timestamp()
-                """
+        for (src_lbl, tgt_lbl, rel_type), group_edges in by_key.items():
+            # Build MATCH clauses: use labels when known, fall back to unlabeled.
+            src_match = f"(src:{src_lbl} {{id: e.source}})" if src_lbl else "(src {id: e.source})"
+            tgt_match = f"(tgt:{tgt_lbl} {{id: e.target}})" if tgt_lbl else "(tgt {id: e.target})"
+            query = f"""
+            UNWIND $edges AS e
+            MATCH {src_match}
+            MATCH {tgt_match}
+            MERGE (src)-[r:{rel_type}]->(tgt)
+            SET r += e.props
+            SET r.updated_at = timestamp()
+            """
+            for batch in _chunks(group_edges, _BATCH_SIZE):
                 params = {
                     "edges": [
                         {
@@ -146,7 +154,8 @@ class Neo4jStore:
                     ]
                 }
                 async with self._driver.session() as session:
-                    await session.run(query, params)
+                    result = await session.run(query, params)
+                    await result.consume()
 
     async def get_resource_graph(self, resource_id: str, depth: int = 2) -> dict[str, Any]:
         """

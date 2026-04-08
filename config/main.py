@@ -66,6 +66,14 @@ class LogSettings(BaseSettings):
     format: str = "json"  # "json" | "console"
 
 
+class AuthSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="AUTH_", env_file=".env", extra="ignore")
+
+    jwt_secret: SecretStr = Field(..., description="Secret key for signing JWTs")
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_minutes: int = Field(default=60, ge=5)
+
+
 class Settings(BaseSettings):
     """Aggregate settings object — single source of truth."""
 
@@ -76,6 +84,7 @@ class Settings(BaseSettings):
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)  # type: ignore[call-arg]
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)  # type: ignore[call-arg]
     log: LogSettings = Field(default_factory=LogSettings)  # type: ignore[call-arg]
+    auth: AuthSettings = Field(default_factory=AuthSettings)  # type: ignore[call-arg]
 
 
 @lru_cache(maxsize=1)
