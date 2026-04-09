@@ -57,6 +57,47 @@ def _slim_node(node: GraphNode) -> dict[str, Any]:
     return out
 
 
+def synthesize_dict(raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Same as synthesize() but accepts a raw MongoDB dict instead of a GraphDocument.
+    Used by the API routes that read directly from MongoDB.
+    """
+    meta = raw.get("metadata", {})
+    slim_meta = {
+        "scan_id":          meta.get("scan_id"),
+        "account_id":       meta.get("account_id"),
+        "regions_scanned":  meta.get("regions_scanned", []),
+        "started_at":       meta.get("started_at"),
+        "completed_at":     meta.get("completed_at"),
+        "node_count":       meta.get("node_count", 0),
+        "edge_count":       meta.get("edge_count", 0),
+        "collector_errors": meta.get("collector_errors") or None,
+    }
+
+    slim_nodes = []
+    for n in raw.get("nodes", []):
+        label = n.get("label", "")
+        allowed = _KEEP_PROPS.get(label, set())
+        props = {k: v for k, v in (n.get("properties") or {}).items() if k in allowed and v is not None}
+        node: dict[str, Any] = {"id": n["id"], "label": label}
+        if n.get("name"):
+            node["name"] = n["name"]
+        if n.get("region"):
+            node["region"] = n["region"]
+        if n.get("account_id"):
+            node["account_id"] = n["account_id"]
+        if props:
+            node["properties"] = props
+        slim_nodes.append(node)
+
+    slim_edges = [
+        {"source": e["source"], "target": e["target"], "type": e["type"]}
+        for e in raw.get("edges", [])
+    ]
+
+    return {"metadata": slim_meta, "nodes": slim_nodes, "edges": slim_edges}
+
+
 def synthesize(doc: GraphDocument) -> dict[str, Any]:
     """
     Return a slimmed-down dict ready for JSON serialisation.

@@ -1,3 +1,3 @@
-from synthesizer.slim import synthesize
+from synthesizer.slim import synthesize, synthesize_dict
 
-__all__ = ["synthesize"]
+__all__ = ["synthesize", "synthesize_dict"]

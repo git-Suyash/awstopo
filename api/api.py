@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from api.routes.auth import router as auth_router
@@ -45,3 +46,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AWSVisualizer API", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(scan_router)
+
+# ── Middleware ───────────────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

@@ -15,13 +15,12 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from api.deps import get_current_user, get_db
 from config.main import get_settings
-from synthesizer.slim import synthesize
-from graph.graph import GraphDocument
+from synthesizer import synthesize_dict
 
 log = structlog.get_logger(__name__)
 
@@ -107,12 +106,14 @@ async def start_scan(
     background_tasks: BackgroundTasks,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    force: Annotated[bool, Query(description="Force a fresh scan even if cached data exists")] = False,
 ):
     """
     Trigger a full AWS resource scan for the authenticated user.
 
-    The scan runs asynchronously. Poll GET /api/scan/{scan_id} for status.
-    Returns immediately with a scan_id.
+    If a completed scan already exists for this user+account it is returned
+    immediately (cached=True) without re-scanning. Pass ?force=true to override.
+    Poll GET /api/scan/{scan_id} for status when a new scan is queued.
     """
     user_id = current_user["_id"]
 
@@ -122,6 +123,36 @@ async def start_scan(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No AWS account configured. Call POST /api/user/configureaws first.",
         )
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    if not force:
+        existing_job = await db["scan_jobs"].find_one(
+            {"user_id": user_id, "status": "completed"},
+            sort=[("completed_at", -1)],
+        )
+        if existing_job:
+            scan_data_exists = await db["scans"].find_one(
+                {"metadata.user_id": user_id}, projection={"_id": 1}
+            )
+            if scan_data_exists:
+                log.info("scan.cache_hit", user_id=user_id, scan_id=existing_job["_id"])
+                return {
+                    "scan_id": str(existing_job["_id"]),
+                    "status": "completed",
+                    "cached": True,
+                }
+
+        # Also return any scan currently in-flight rather than double-queuing
+        in_flight = await db["scan_jobs"].find_one(
+            {"user_id": user_id, "status": {"$in": ["queued", "running"]}},
+            sort=[("queued_at", -1)],
+        )
+        if in_flight:
+            return {
+                "scan_id": str(in_flight["_id"]),
+                "status": in_flight["status"],
+                "cached": False,
+            }
 
     scan_id = str(uuid.uuid4())
     await db["scan_jobs"].insert_one({
@@ -141,7 +172,7 @@ async def start_scan(
         regions=settings.aws.regions,
     )
 
-    return {"scan_id": scan_id, "status": "queued"}
+    return {"scan_id": scan_id, "status": "queued", "cached": False}
 
 
 @router.get("/scan/{scan_id}")
@@ -198,7 +229,7 @@ async def get_graph(
         )
 
     doc.pop("_id", None)
-    return synthesize(GraphDocument(**doc))
+    return synthesize_dict(doc)
 
 
 @router.get("/graph/{scan_id}")
@@ -214,4 +245,4 @@ async def get_graph_by_scan(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     doc.pop("_id", None)
-    return synthesize(GraphDocument(**doc))
+    return synthesize_dict(doc)

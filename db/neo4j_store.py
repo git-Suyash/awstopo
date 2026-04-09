@@ -51,25 +51,36 @@ class Neo4jStore:
             log.info("neo4j.disconnected")
 
     async def _ensure_constraints(self) -> None:
-        """Create uniqueness constraints so MERGE is fast and data is clean."""
+        """
+        Create composite (id, user_id) uniqueness constraints for multi-tenant isolation.
+
+        Drops any legacy single-property id constraints first — those would block
+        a second user from scanning the same AWS account (same resource IDs).
+        """
         assert self._driver is not None  # noqa: S101
-        constraints = [
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:AWSAccount) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Region) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:VPC) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Subnet) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:SecurityGroup) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:EC2Instance) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:RDSInstance) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:RDSCluster) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:S3Bucket) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:InternetGateway) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:NatGateway) REQUIRE n.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (n:RouteTable) REQUIRE n.id IS UNIQUE",
+        labels = [
+            "AWSAccount", "Region", "VPC", "Subnet", "SecurityGroup",
+            "EC2Instance", "RDSInstance", "RDSCluster", "S3Bucket",
+            "InternetGateway", "NatGateway", "RouteTable",
         ]
         async with self._driver.session() as session:
-            for cql in constraints:
-                await session.run(cql)
+            # Find and drop old single-property id constraints
+            result = await session.run(
+                "SHOW CONSTRAINTS YIELD name, properties "
+                "WHERE size(properties) = 1 AND properties[0] = 'id'"
+            )
+            old = await result.data()
+            for row in old:
+                await session.run(f"DROP CONSTRAINT `{row['name']}` IF EXISTS")
+            if old:
+                log.info("neo4j.dropped_legacy_constraints", count=len(old))
+
+            # Create composite (id, user_id) constraints
+            for label in labels:
+                await session.run(
+                    f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{label}) "
+                    f"REQUIRE (n.id, n.user_id) IS UNIQUE"
+                )
 
     async def ingest_graph(self, doc: GraphDocument) -> None:
         """
